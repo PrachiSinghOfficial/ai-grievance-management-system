@@ -54,12 +54,12 @@ function Dashboard() {
         const [statsResponse, grievancesResponse] =
           await Promise.all([
             fetch(
-              'http://127.0.0.1:8000/grievances/stats',
+              '/api/grievances/stats',
               { headers }
             ),
 
             fetch(
-              'http://127.0.0.1:8000/grievances/me',
+              '/api/grievances/me',
               { headers }
             ),
           ])

@@ -44,7 +44,7 @@ function ManagerSLA() {
 
       try {
         const response = await fetch(
-          'http://127.0.0.1:8000/manager/sla',
+          '/api/manager/sla',
           {
             headers: {
               Authorization: `Bearer ${token}`,

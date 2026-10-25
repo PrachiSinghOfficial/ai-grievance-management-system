@@ -44,7 +44,7 @@ if (attachment) {
 }
 
 const response = await fetch(
-  'http://127.0.0.1:8000/grievances/with-attachment',
+  '/api/grievances/with-attachment',
   {
     method: 'POST',
 

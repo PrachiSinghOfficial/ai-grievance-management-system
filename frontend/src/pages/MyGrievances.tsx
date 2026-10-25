@@ -32,7 +32,7 @@ function MyGrievances() {
         }
 
         const response = await fetch(
-          'http://127.0.0.1:8000/grievances/me',
+          '/api/grievances/me',
           {
             headers: {
               Authorization: `Bearer ${token}`,

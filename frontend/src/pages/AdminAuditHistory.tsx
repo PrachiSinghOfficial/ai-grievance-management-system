@@ -35,7 +35,7 @@ export default function AdminAuditHistory() {
         }
 
         const response = await fetch(
-          'http://127.0.0.1:8000/admin/audit-logs',
+          '/api/admin/audit-logs',
           {
             headers: {
               Authorization: `Bearer ${token}`,

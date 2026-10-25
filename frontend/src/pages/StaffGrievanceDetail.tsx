@@ -62,7 +62,7 @@ function StaffGrievanceDetail() {
     }
 
     fetch(
-      `http://127.0.0.1:8000/admin/grievances/${id}`,
+      `/api/admin/grievances/${id}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
@@ -114,7 +114,7 @@ function StaffGrievanceDetail() {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/admin/grievances/${id}`,
+        `/api/admin/grievances/${id}`,
         {
           method: 'PATCH',
           headers: {

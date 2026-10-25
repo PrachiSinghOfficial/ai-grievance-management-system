@@ -59,7 +59,7 @@ function ManagerGrievances() {
         setError('')
 
         const response = await fetch(
-          'http://127.0.0.1:8000/manager/grievances',
+          '/api/manager/grievances',
           {
             method: 'GET',
             headers: {

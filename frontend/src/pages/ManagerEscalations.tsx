@@ -33,7 +33,7 @@ function ManagerEscalations() {
 
       try {
         const response = await fetch(
-          'http://127.0.0.1:8000/manager/escalations',
+          '/api/manager/escalations',
           {
             headers: {
               Authorization: `Bearer ${token}`,

@@ -37,7 +37,7 @@ function Notification() {
       setError('')
 
       const response = await fetch(
-        'http://127.0.0.1:8000/notifications/me',
+        '/api/notifications/me',
         {
           method: 'GET',
           headers: {
@@ -90,7 +90,7 @@ function Notification() {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/notifications/${notificationId}/read`,
+        `/api/notifications/${notificationId}/read`,
         {
           method: 'PATCH',
           headers: {

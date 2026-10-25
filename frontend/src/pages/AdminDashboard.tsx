@@ -51,7 +51,7 @@ function AdminDashboard() {
         }
 
         const dashboardResponse = await fetch(
-          'http://127.0.0.1:8000/admin/dashboard',
+          '/api/admin/dashboard',
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -72,7 +72,7 @@ function AdminDashboard() {
         setDashboardData(dashboardResult)
 
         const usersResponse = await fetch(
-          'http://127.0.0.1:8000/admin/users',
+          '/api/admin/users',
           {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -149,7 +149,7 @@ function AdminDashboard() {
 
     try {
       const response = await fetch(
-        `http://127.0.0.1:8000/admin/users/${userId}/role`,
+        `/api/admin/users/${userId}/role`,
         {
           method: 'PATCH',
           headers: {

@@ -41,7 +41,7 @@ function StaffDashboard() {
       }
     }
 
-    fetch('http://127.0.0.1:8000/staff/dashboard', {
+    fetch('/api/staff/dashboard', {
       headers: {
         Authorization: `Bearer ${token}`,
       },
