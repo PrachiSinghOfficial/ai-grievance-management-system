@@ -1,0 +1,9 @@
+﻿fastapi
+uvicorn[standard]
+PyJWT
+pymongo
+python-dotenv
+pydantic[email]
+pwdlib[argon2]
+boto3
+python-multipart
