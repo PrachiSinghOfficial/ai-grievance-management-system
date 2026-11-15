@@ -7,6 +7,8 @@ interface AdminUser {
   name: string
   email: string
   role: string
+  department_id?: string
+  department_name?: string
 }
 
 interface DashboardData {
@@ -36,6 +38,15 @@ function AdminDashboard() {
   const [usersLoading, setUsersLoading] = useState(true)
   const [savingUserId, setSavingUserId] = useState<string | null>(null)
   const [roleMessage, setRoleMessage] = useState('')
+
+  const [departments, setDepartments] = useState<
+  { id: string; name: string }[]
+>([])
+const [pendingManagerUserId, setPendingManagerUserId] =
+  useState<string | null>(null)
+
+const [selectedDepartmentId, setSelectedDepartmentId] =
+  useState('')
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -90,6 +101,25 @@ function AdminDashboard() {
           )
         }
 
+        const departmentsResponse = await fetch(
+  '/api/admin/departments',
+  {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  }
+)
+
+const departmentsResult = await departmentsResponse.json()
+
+if (departmentsResponse.ok) {
+  setDepartments(departmentsResult.departments || [])
+} else {
+  console.error(
+    departmentsResult.detail || 'Unable to load departments.'
+  )
+}
+
         const storedUser =
           localStorage.getItem('student')
 
@@ -135,7 +165,8 @@ function AdminDashboard() {
 
   const handleRoleChange = async (
     userId: string,
-    newRole: string
+    newRole: string,
+departmentId?: string
   ) => {
     const token = localStorage.getItem('access_token')
 
@@ -157,8 +188,9 @@ function AdminDashboard() {
             Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({
-            role: newRole,
-          }),
+  role: newRole,
+  department_id: departmentId || null,
+}),
         }
       )
 
@@ -171,15 +203,17 @@ function AdminDashboard() {
       }
 
       setAdminUsers((currentUsers) =>
-        currentUsers.map((adminUser) =>
-          adminUser.id === userId
-            ? {
-                ...adminUser,
-                role: result.user.role,
-              }
-            : adminUser
-        )
-      )
+  currentUsers.map((adminUser) =>
+    adminUser.id === userId
+      ? {
+          ...adminUser,
+          role: result.user.role,
+          department_id: result.user.department_id || '',
+          department_name: result.user.department_name || '',
+        }
+      : adminUser
+  )
+)
 
       setRoleMessage(
         `Role updated successfully for ${result.user.name}.`
@@ -768,12 +802,22 @@ function AdminDashboard() {
                               savingUserId ===
                               adminUser.id
                             }
-                            onChange={(event) =>
-                              handleRoleChange(
-                                adminUser.id,
-                                event.target.value
-                              )
-                            }
+                            onChange={(event) => {
+  const selectedRole = event.target.value
+
+  if (selectedRole === 'manager') {
+    setPendingManagerUserId(adminUser.id)
+    setSelectedDepartmentId(
+      adminUser.department_id || ''
+    )
+    return
+  }
+
+  setPendingManagerUserId(null)
+  setSelectedDepartmentId('')
+
+  handleRoleChange(adminUser.id, selectedRole)
+}}
                             style={{
                               padding: '8px 12px',
                               border:
@@ -811,6 +855,49 @@ function AdminDashboard() {
                               Admin
                             </option>
                           </select>
+
+                          {pendingManagerUserId === adminUser.id && (
+  <div style={{ marginTop: '10px' }}>
+    <select
+      value={selectedDepartmentId}
+      onChange={(event) =>
+        setSelectedDepartmentId(event.target.value)
+      }
+      style={{
+        padding: '8px',
+        border: '1px solid #cbd5e1',
+        borderRadius: '8px',
+        width: '100%',
+      }}
+    >
+      <option value="">Select Department</option>
+
+      {departments.map((department) => (
+        <option key={department.id} value={department.id}>
+          {department.name}
+        </option>
+      ))}
+    </select>
+
+    <button
+      onClick={() => {
+        handleRoleChange(
+          adminUser.id,
+          'manager',
+          selectedDepartmentId
+        )
+        setPendingManagerUserId(null)
+      }}
+      disabled={
+        !selectedDepartmentId ||
+        savingUserId === adminUser.id
+      }
+      style={{ marginTop: '8px' }}
+    >
+      Save Manager
+    </button>
+  </div>
+)}
 
                           {savingUserId ===
                             adminUser.id && (

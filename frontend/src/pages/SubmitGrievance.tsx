@@ -7,6 +7,7 @@ function SubmitGrievance() {
 
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('')
+  const [department, setDepartment] = useState('')
   const [description, setDescription] = useState('')
   const [anonymous, setAnonymous] = useState(false)
 
@@ -34,8 +35,10 @@ function SubmitGrievance() {
 
 formData.append('title', title);
 formData.append('category', category);
+formData.append('department', department);
 formData.append('description', description);
 formData.append('anonymous', String(anonymous));
+formData.append('force_submit', 'false')
 
 // Add the selected file if one exists.
 // Make sure `attachment` matches your file input state variable.
@@ -43,7 +46,7 @@ if (attachment) {
   formData.append('attachment', attachment);
 }
 
-const response = await fetch(
+let response = await fetch(
   '/api/grievances/with-attachment',
   {
     method: 'POST',
@@ -64,7 +67,44 @@ try {
 } catch {
   data = { detail: responseText || 'Server returned an unreadable response.' }
 }
+if (data.duplicate) {
 
+  const existing = data.similar_grievance
+
+  const confirmSubmit = window.confirm(
+    `A similar grievance already exists!\n\n` +
+    `Title: ${existing.title}\n` +
+    `Status: ${existing.status}\n` +
+    `Similarity: ${existing.similarity}%\n\n` +
+    `Do you still want to submit your grievance?`
+  )
+
+  if (!confirmSubmit) {
+    setError('Submission cancelled. Similar grievance already exists.')
+    return
+  }
+
+  formData.set('force_submit', 'true')
+
+  response = await fetch(
+    '/api/grievances/with-attachment',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    }
+  )
+
+  const retryText = await response.text()
+
+  try {
+    data = retryText ? JSON.parse(retryText) : {}
+  } catch {
+    data = { detail: 'Server returned an unreadable response.' }
+  }
+}
       if (!response.ok) {
         throw new Error(
           data.detail || 'Unable to submit grievance.'
@@ -202,7 +242,23 @@ try {
               <select
                 id="category"
                 value={category}
-                onChange={(e) => setCategory(e.target.value)}
+                onChange={(e) => {
+  const selectedCategory = e.target.value
+  setCategory(selectedCategory)
+
+  const departmentMap: Record<string, string> = {
+    'Hostel': 'Hostel Department',
+    'Library': 'Library Department',
+    'Canteen': 'Canteen Department',
+    'IT / Technology': 'information technology',
+    'Classroom': 'Academic Department',
+    'Faculty': 'Faculty Affairs',
+    'Administration': 'General Administration',
+    'Other': 'General Administration',
+  }
+
+  setDepartment(departmentMap[selectedCategory] || '')
+}}
                 required
               >
 
@@ -245,6 +301,30 @@ try {
               </select>
 
             </div>
+
+            <div className="form-group">
+  <label htmlFor="department">Department *</label>
+
+  <select
+    id="department"
+    value={department}
+    onChange={(e) => setDepartment(e.target.value)}
+    required
+  >
+    <option value="">Select a department</option>
+    <option value="Hostel Department">Hostel Department</option>
+    <option value="Library Department">Library Department</option>
+    <option value="Canteen Department">Canteen Department</option>
+    <option value="information technology">
+      Information Technology
+    </option>
+    <option value="Academic Department">Academic Department</option>
+    <option value="Faculty Affairs">Faculty Affairs</option>
+    <option value="General Administration">
+      General Administration
+    </option>
+  </select>
+</div>
 
 
             <div className="form-group">

@@ -63,6 +63,52 @@ function MyGrievances() {
     fetchGrievances()
   }, [navigate])
 
+    const handleDeleteGrievance = async (
+    grievanceId: string
+  ) => {
+    const confirmed = window.confirm(
+      'Are you sure you want to delete this grievance?'
+    )
+
+    if (!confirmed) return
+
+    try {
+      const token = localStorage.getItem('access_token')
+
+      const response = await fetch(
+        `/api/grievances/${grievanceId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || 'Unable to delete grievance.'
+        )
+      }
+
+      setGrievances((previous) =>
+        previous.filter(
+          (grievance) => grievance.id !== grievanceId
+        )
+      )
+
+      alert('Grievance deleted successfully.')
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Something went wrong.'
+      )
+    }
+  }
+
   return (
     <div className="my-grievances-page">
 
@@ -256,6 +302,16 @@ function MyGrievances() {
                     <span className="priority-text">
                       {grievance.priority}
                     </span>
+
+                    <button
+  className="delete-grievance-button"
+  onClick={(event) => {
+    event.stopPropagation()
+    handleDeleteGrievance(grievance.id)
+  }}
+>
+  🗑️ Delete
+</button>
 
                   </div>
 

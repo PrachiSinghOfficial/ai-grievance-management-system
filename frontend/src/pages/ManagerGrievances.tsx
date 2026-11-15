@@ -152,6 +152,52 @@ function ManagerGrievances() {
       item.status === 'Closed'
   ).length
 
+    const handleDeleteGrievance = async (
+    grievanceId: string
+  ) => {
+    const confirmed = window.confirm(
+      'Are you sure you want to delete this grievance?'
+    )
+
+    if (!confirmed) return
+
+    try {
+      const token = localStorage.getItem('access_token')
+
+      const response = await fetch(
+        `/api/grievances/${grievanceId}`,
+        {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      )
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(
+          data.detail || 'Unable to delete grievance.'
+        )
+      }
+
+      setGrievances((previous) =>
+        previous.filter(
+          (item) => item.id !== grievanceId
+        )
+      )
+
+      alert('Grievance deleted successfully.')
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : 'Something went wrong.'
+      )
+    }
+  }
+
   const logout = () => {
     localStorage.removeItem('access_token')
     localStorage.removeItem('student')
@@ -746,6 +792,25 @@ function ManagerGrievances() {
                           >
                             Review
                           </button>
+                          <button
+  onClick={(event) => {
+    event.stopPropagation()
+    handleDeleteGrievance(grievance.id)
+  }}
+  style={{
+    display: 'block',
+    marginTop: '8px',
+    padding: '9px 14px',
+    borderRadius: '8px',
+    border: '1px solid #fecaca',
+    background: '#fee2e2',
+    color: '#dc2626',
+    cursor: 'pointer',
+    fontWeight: 600,
+  }}
+>
+  🗑️ Delete
+</button>
                         </td>
                       </tr>
                     )

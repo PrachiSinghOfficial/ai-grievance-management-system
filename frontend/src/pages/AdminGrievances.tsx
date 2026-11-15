@@ -73,6 +73,44 @@ function AdminGrievances() {
     navigate(`/admin/grievances/${grievanceId}`)
   }
 
+  const handleDeleteGrievance = async (
+  grievanceId: string
+) => {
+  if (!window.confirm('Are you sure you want to delete this grievance?')) {
+    return
+  }
+
+  try {
+    const token = localStorage.getItem('access_token')
+
+    const response = await fetch(
+      `/api/grievances/${grievanceId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    )
+
+    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(data.detail || 'Unable to delete grievance.')
+    }
+
+    setGrievances((previous) =>
+      previous.filter((item) => item.id !== grievanceId)
+    )
+
+    alert('Grievance deleted successfully.')
+  } catch (err) {
+    alert(
+      err instanceof Error ? err.message : 'Something went wrong.'
+    )
+  }
+}
+
   const getStatusClass = (status: string) => {
     switch (status.toLowerCase()) {
       case 'resolved':
@@ -438,7 +476,7 @@ function AdminGrievances() {
 
                 <thead>
 
-                  
+
 
                   <tr
                     style={{
@@ -473,6 +511,10 @@ function AdminGrievances() {
 
                     <th style={thStyle}>
                       Submitted
+                    </th>
+
+                    <th style={thStyle}>
+                      Action
                     </th>
 
                   </tr>
@@ -591,6 +633,26 @@ function AdminGrievances() {
   {grievance.created_at
     ? new Date(grievance.created_at).toLocaleDateString()
     : '—'}
+</td>
+
+<td style={tdStyle}>
+  <button
+    onClick={(event) => {
+      event.stopPropagation()
+      handleDeleteGrievance(grievance.id)
+    }}
+    style={{
+      background: '#fee2e2',
+      color: '#dc2626',
+      border: '1px solid #fecaca',
+      padding: '8px 12px',
+      borderRadius: '7px',
+      cursor: 'pointer',
+      fontWeight: 600,
+    }}
+  >
+    🗑️ Delete
+  </button>
 </td>
                     </tr>
 

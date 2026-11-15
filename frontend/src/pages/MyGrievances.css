@@ -439,3 +439,20 @@
   }
 
 }
+.delete-grievance-button {
+  background: #fff1f2;
+  color: #dc2626;
+  border: 1px solid #fecaca;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.delete-grievance-button:hover {
+  background: #dc2626;
+  color: white;
+  border-color: #dc2626;
+}

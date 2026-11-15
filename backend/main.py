@@ -1,12 +1,12 @@
 import os
 from datetime import datetime, timedelta, timezone
-
+from difflib import SequenceMatcher
 import jwt
 from bson import ObjectId
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, EmailStr
 from pymongo import MongoClient
 from pwdlib import PasswordHash
@@ -14,7 +14,8 @@ import uuid
 import re
 from fastapi import File, Form, UploadFile
 from botocore.exceptions import BotoCoreError, ClientError
-
+from typing import Optional
+from email_service import send_email
 from cloud_storage import (
     upload_file_to_s3,
     generate_presigned_url,
@@ -94,6 +95,20 @@ for name in required_departments:
     )
 
 audit_logs_collection = db["audit_logs"]
+def send_user_email(user, subject, body):
+    if not user:
+        return
+
+    email = user.get("email")
+
+    if not email:
+        return
+
+    send_email(
+        to_email=email,
+        subject=subject,
+        body=body
+    )
 
 
 # ============================================================
@@ -124,7 +139,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60
 # ============================================================
 
 oauth2_scheme = OAuth2PasswordBearer(
-    tokenUrl="/login"
+    tokenUrl="/token"
 )
 
 
@@ -345,9 +360,8 @@ class GrievanceUpdate(BaseModel):
 
 
 class UserRoleUpdate(BaseModel):
-
     role: str
-
+    department_id: Optional[str] = None
 
 class NotificationCreate(BaseModel):
 
@@ -553,7 +567,56 @@ def login_student(
                 user_role
         }
     }
+@app.post("/token")
+def login_for_swagger(
+    form_data: OAuth2PasswordRequestForm = Depends()
+):
 
+    existing_student = students_collection.find_one({
+        "email": form_data.username
+    })
+
+    if not existing_student:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password."
+        )
+
+    try:
+        password_is_valid = password_hash.verify(
+            form_data.password,
+            existing_student["password"]
+        )
+    except Exception:
+        password_is_valid = False
+
+    if not password_is_valid:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid email or password."
+        )
+
+    user_role = existing_student.get("role", "student")
+
+    token_data = {
+        "sub": str(existing_student["_id"]),
+        "email": existing_student["email"],
+        "role": user_role,
+        "exp": utc_now() + timedelta(
+            minutes=ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+    }
+
+    access_token = jwt.encode(
+        token_data,
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
 
 # ============================================================
 # CURRENT USER
@@ -597,45 +660,147 @@ def get_current_user(
 
 
 
-# Category -> Department name
 category_department_map = {
     "hostel": "Hostel Department",
     "library": "Library Department",
     "canteen": "Canteen Department",
     "it support": "information technology",
+    "it": "information technology",
+    "information technology": "information technology",
     "classroom": "Academic Department",
     "faculty": "Faculty Affairs",
     "general": "General Administration",
 }
 
-def assign_department(category):
-    normalized_category = (category or "").strip().lower()
 
-    department_name = category_department_map.get(
-        normalized_category,
-        "General Administration"
+def detect_complaint_priority(title, description):
+    text = f"{title} {description}".lower()
+
+    urgent_keywords = [
+        "emergency",
+        "fire",
+        "harassment",
+        "ragging",
+        "threat",
+        "violence",
+        "unsafe",
+        "danger",
+        "urgent",
+        "severe"
+    ]
+
+    high_keywords = [
+        "not working",
+        "broken",
+        "no water",
+        "no electricity",
+        "internet down",
+        "security",
+        "leakage",
+        "serious"
+    ]
+
+    if any(keyword in text for keyword in urgent_keywords):
+        return "High"
+
+    if any(keyword in text for keyword in high_keywords):
+        return "Medium"
+
+    return "Low"
+
+
+def find_duplicate_grievance(title, category, description):
+
+    existing_grievances = grievances_collection.find({
+        "category": {
+            "$regex": f"^{re.escape(category.strip())}$",
+            "$options": "i"
+        },
+        "status": {
+            "$nin": ["Resolved", "Closed", "Rejected"]
+        }
+    })
+
+    new_text = f"{title} {description}".lower().strip()
+
+    best_match = None
+    highest_score = 0
+
+    for grievance in existing_grievances:
+
+        old_text = (
+            f"{grievance.get('title', '')} "
+            f"{grievance.get('description', '')}"
+        ).lower().strip()
+
+        score = SequenceMatcher(
+            None,
+            new_text,
+            old_text
+        ).ratio()
+
+        if score > highest_score:
+            highest_score = score
+            best_match = grievance
+
+    if best_match and highest_score >= 0.72:
+
+        return {
+            "duplicate": True,
+            "similarity": round(highest_score * 100, 1),
+            "grievance_id": str(best_match["_id"]),
+            "title": best_match.get("title", ""),
+            "status": best_match.get("status", "Submitted")
+        }
+
+    return None
+
+
+def assign_department(department_name):
+    department_name = (department_name or "").strip()
+
+    allowed_departments = [
+        "Hostel Department",
+        "Library Department",
+        "Canteen Department",
+        "information technology",
+        "Academic Department",
+        "Faculty Affairs",
+        "General Administration",
+    ]
+
+    matched_department = next(
+        (
+            name for name in allowed_departments
+            if name.lower() == department_name.lower()
+        ),
+        None,
     )
+
+    if not matched_department:
+        raise HTTPException(
+            status_code=400,
+            detail="Please select a valid department.",
+        )
 
     department = departments_collection.find_one({
         "name": {
-            "$regex": f"^{re.escape(department_name)}$",
-            "$options": "i"
+            "$regex": f"^{re.escape(matched_department)}$",
+            "$options": "i",
         }
     })
 
     if not department:
-        return {
-            "department_id": None,
-            "department_name": department_name,
-            "assignment_status": "Unassigned"
-        }
+        raise HTTPException(
+            status_code=400,
+            detail="Selected department was not found in the database.",
+        )
 
     return {
         "department_id": str(department["_id"]),
         "department_name": department["name"],
-        "assignment_status": "Assigned"
+        "assignment_status": "Assigned",
     }
-
 @app.post("/grievances")
 def create_grievance(
     grievance: GrievanceCreate,
@@ -643,6 +808,11 @@ def create_grievance(
 ):
 
     now = utc_now()
+    detected_priority = detect_complaint_priority(
+    grievance.title,
+    grievance.description
+)
+
 
     student_id = str(
         current_student["_id"]
@@ -686,8 +856,7 @@ def create_grievance(
         "status":
             "Submitted",
 
-        "priority":
-            "Pending AI Review",
+        "priority": detected_priority,
 
         "created_at":
             now,
@@ -704,13 +873,15 @@ def create_grievance(
         result.inserted_id
     )
 
-    
+
 
     # --------------------------------------------------------
     # AUTOMATIC NOTIFICATION
     # --------------------------------------------------------
 
     notifications_collection.insert_one({
+
+
 
         "user_id":
             student_id,
@@ -734,37 +905,72 @@ def create_grievance(
         "created_at":
             now
     })
+    # Send email to concerned student
+
+    student = students_collection.find_one({
+                    "_id": object_id_or_400(str(student_id))
+                })
+
+    if student:
+                    email_subject = "Your Grievance Has Been Updated"
+
+                    email_body = (
+                        f"Hello {student.get('name', 'Student')},\n\n"
+                        f"Your grievance '{grievance.get('title', '')}' "
+                        f"has been updated.\n\n"
+                        + " ".join(notification_messages)
+                        + "\n\nThank you,\nCampusResolve Team"
+                    )
+
+                    send_user_email(
+                        student,
+                        email_subject,
+                        email_body
+                    )
+
 
     return {
-
-        "message":
-            "Grievance submitted successfully.",
-
-        "grievance_id":
-            grievance_id,
-
-        "status":
-            "Submitted"
+        "message": "Grievance submitted successfully.",
+        "grievance_id": grievance_id,
+        "status": "Submitted",
+        "department_id": department_assignment["department_id"],
+        "department_name": department_assignment["department_name"],
+        "assignment_status": department_assignment["assignment_status"]
     }
 
 # ============================================================
 # CREATE GRIEVANCE WITH OPTIONAL S3 ATTACHMENT
 # ============================================================
-
 @app.post("/grievances/with-attachment")
 async def create_grievance_with_attachment(
     title: str = Form(...),
     category: str = Form(...),
+    department: str = Form(...),
     description: str = Form(...),
     anonymous: bool = Form(False),
+    force_submit: bool = Form(False),
     attachment: UploadFile | None = File(None),
     current_student=Depends(get_current_student),
 ):
     student_id = str(current_student["_id"])
     now = utc_now()
-    department_assignment = assign_department(
-    category
-)
+
+    department_assignment = assign_department(department)
+    print("DEPARTMENT ASSIGNMENT:", department_assignment)
+
+    if not force_submit:
+        duplicate = find_duplicate_grievance(
+            title,
+            category,
+            description
+        )
+
+        if duplicate:
+            return {
+                "duplicate": True,
+                "message": "A similar grievance already exists.",
+                "similar_grievance": duplicate
+            }
 
     attachment_data = None
 
@@ -781,8 +987,7 @@ async def create_grievance_with_attachment(
                 detail="Only JPG, PNG, and PDF files are allowed.",
             )
 
-        max_size = 5 * 1024 * 1024  # 5 MB
-
+        max_size = 5 * 1024 * 1024
         file_content = await attachment.read(max_size + 1)
 
         if len(file_content) > max_size:
@@ -840,7 +1045,7 @@ async def create_grievance_with_attachment(
         "student_id": student_id,
         "student_name": current_student.get("name", "Student"),
         "status": "Submitted",
-        "priority": "Pending AI Review",
+        "priority": detect_complaint_priority(title, description),
         "created_at": now,
         "updated_at": now,
         "attachment": attachment_data,
@@ -860,10 +1065,39 @@ async def create_grievance_with_attachment(
         "created_at": now,
     })
 
+    email_subject = f"New Grievance Submitted: {title}"
+
+    email_body = (
+        f"A new grievance has been submitted.\n\n"
+        f"Title: {title}\n"
+        f"Category: {category}\n"
+        f"Department: {department_assignment['department_name']}\n"
+        f"Description: {description}\n"
+        f"Student: {current_student.get('name', 'Student')}\n"
+    )
+
+    # Send email to all admins
+    admins = students_collection.find({"role": "admin"})
+
+    for admin in admins:
+        send_user_email(admin, email_subject, email_body)
+
+    # Send email to managers of the assigned department
+    managers = students_collection.find({
+        "role": "manager",
+        "department_id": department_assignment["department_id"]
+    })
+
+    for manager in managers:
+        send_user_email(manager, email_subject, email_body)
+
     return {
         "message": "Grievance submitted successfully.",
         "grievance_id": str(result.inserted_id),
         "status": "Submitted",
+        "department_id": department_assignment["department_id"],
+        "department_name": department_assignment["department_name"],
+        "assignment_status": department_assignment["assignment_status"],
         "attachment_uploaded": attachment_data is not None,
         "attachment_filename": (
             attachment_data["filename"]
@@ -871,7 +1105,6 @@ async def create_grievance_with_attachment(
             else None
         ),
     }
-
 # ============================================================
 # GET MY GRIEVANCES
 # ============================================================
@@ -951,7 +1184,7 @@ def get_my_grievances(
                 else None,
             "attachment": get_attachment_response(grievance)
 
-                
+
         })
 
     return {
@@ -1294,10 +1527,7 @@ def get_admin_grievances(
 
     grievances = list(
         grievances_collection.find({})
-        .sort(
-            "created_at",
-            -1
-        )
+        .sort("created_at", -1)
     )
 
     result = []
@@ -1306,66 +1536,40 @@ def get_admin_grievances(
 
         result.append({
 
-            "id":
-                str(grievance["_id"]),
+            "id": str(grievance["_id"]),
 
-            "title":
-                grievance.get(
-                    "title",
-                    ""
-                ),
+            "title": grievance.get("title", ""),
 
-            "category":
-                grievance.get(
-                    "category",
-                    ""
-                ),
+            "category": grievance.get("category", ""),
 
-            "description":
-                grievance.get(
-                    "description",
-                    ""
-                ),
+            "description": grievance.get("description", ""),
 
-            "status":
-                grievance.get(
-                    "status",
-                    "Submitted"
-                ),
+            "status": grievance.get("status", "Submitted"),
 
-            "priority":
-                grievance.get(
-                    "priority",
-                    "Normal"
-                ),
+            "priority": grievance.get("priority", "Normal"),
 
-            "anonymous":
-                grievance.get(
-                    "anonymous",
-                    False
-                ),
+            "anonymous": grievance.get("anonymous", False),
 
-            "created_at":
-                grievance.get(
-                    "created_at"
-                ),
+            "created_at": grievance.get("created_at"),
 
-            "student_id":
-                str(
-                    grievance.get(
-                        "student_id",
-                        ""
-                    )
-                )
+            "student_id": str(grievance.get("student_id", "")),
+
+            "department_id": grievance.get("department_id"),
+
+            "department_name": grievance.get(
+                "department_name",
+                "Unassigned"
+            ),
+
+            "assignment_status": grievance.get(
+                "assignment_status",
+                "Unassigned"
+            )
         })
 
     return {
-
-        "grievances":
-            result,
-
-        "total":
-            len(result)
+        "grievances": result,
+        "total": len(result)
     }
 
 
@@ -1402,69 +1606,22 @@ def get_admin_grievance_detail(
             status_code=404,
             detail="Grievance not found."
         )
-
     return {
-
-        "id":
-            str(grievance["_id"]),
-
-        "title":
-            grievance.get(
-                "title",
-                ""
-            ),
-
-        "category":
-            grievance.get(
-                "category",
-                ""
-            ),
-
-        "description":
-            grievance.get(
-                "description",
-                ""
-            ),
-
-        "status":
-            grievance.get(
-                "status",
-                "Submitted"
-            ),
-
-        "priority":
-            grievance.get(
-                "priority",
-                "Normal"
-            ),
-
-        "anonymous":
-            grievance.get(
-                "anonymous",
-                False
-            ),
-
-        "student_id":
-            str(
-                grievance.get(
-                    "student_id",
-                    ""
-                )
-            ),
-
-        "created_at":
-            grievance.get(
-                "created_at"
-            ),
-
-        "submitted_at":
-            grievance.get(
-                "submitted_at"
-            ),
-        "attachment":
-          get_attachment_response(grievance)
+        "id": str(grievance["_id"]),
+        "title": grievance.get("title", ""),
+        "category": grievance.get("category", ""),
+        "department_id": grievance.get("department_id"),
+        "department_name": grievance.get("department_name", "Unassigned"),
+        "assignment_status": grievance.get("assignment_status", "Unassigned"),
+        "description": grievance.get("description", ""),
+        "status": grievance.get("status", "Submitted"),
+        "priority": grievance.get("priority", "Normal"),
+        "anonymous": grievance.get("anonymous", False),
+        "student_id": str(grievance.get("student_id", "")),
+        "created_at": grievance.get("created_at"),
+        "submitted_at": grievance.get("submitted_at"),
+        "attachment": get_attachment_response(grievance)
     }
-
 
 # ============================================================
 # UPDATE ADMIN GRIEVANCE
@@ -1599,7 +1756,7 @@ def update_admin_grievance(
         }
     )
 
-    
+
     # --------------------------------------------------------
     # AUDIT LOG: GRIEVANCE UPDATED
     # --------------------------------------------------------
@@ -1687,6 +1844,35 @@ def update_admin_grievance(
                     utc_now()
             })
 
+                                   # Send email to concerned student
+            student = students_collection.find_one({
+                "_id": object_id_or_400(str(student_id))
+            })
+
+            print("EMAIL DEBUG: Student found:", bool(student))
+            print(
+                "EMAIL DEBUG: Student email exists:",
+                bool(student and student.get("email"))
+            )
+
+            if student:
+                email_subject = "Your Grievance Has Been Updated"
+
+                email_body = (
+                    f"Hello {student.get('name', 'Student')},\n\n"
+                    f"Your grievance '{grievance.get('title', '')}' "
+                    f"has been updated.\n\n"
+                    + " ".join(notification_messages)
+                    + "\n\nThank you,\nCampusResolve Team"
+                )
+
+                send_user_email(
+                    student,
+                    email_subject,
+                    email_body
+                )
+                print("EMAIL DEBUG: Email function called")
+
     updated_grievance = (
         grievances_collection.find_one(
             {
@@ -1740,78 +1926,80 @@ def update_admin_grievance(
 def update_user_role(
     user_id: str,
     role_data: UserRoleUpdate,
-    current_user=Depends(
-        require_role("admin")
-    )
+    current_user=Depends(require_role("admin"))
 ):
-
-    allowed_roles = [
-
-        "student",
-
-        "staff",
-
-        "manager",
-
-        "admin"
-    ]
+    allowed_roles = ["student", "staff", "manager", "admin"]
 
     if role_data.role not in allowed_roles:
-
         raise HTTPException(
             status_code=400,
             detail="Invalid user role."
         )
 
-    user_object_id = object_id_or_400(
-        user_id
-    )
+    user_object_id = object_id_or_400(user_id)
 
-    user = students_collection.find_one(
-        {
-            "_id":
-                user_object_id
-        }
-    )
+    user = students_collection.find_one({"_id": user_object_id})
 
     if not user:
-
         raise HTTPException(
             status_code=404,
             detail="User not found."
         )
 
     if (
-        str(user["_id"])
-        == str(current_user["_id"])
+        str(user["_id"]) == str(current_user["_id"])
         and role_data.role != "admin"
     ):
-
         raise HTTPException(
             status_code=400,
-            detail=(
-                "You cannot remove your own admin role."
-            )
+            detail="You cannot remove your own admin role."
         )
 
+    update_fields = {
+        "role": role_data.role,
+        "updated_at": utc_now()
+    }
+
+    if role_data.role == "manager":
+
+        if not role_data.department_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Department is required for a manager."
+            )
+
+        department_object_id = object_id_or_400(
+            role_data.department_id
+        )
+
+        department = departments_collection.find_one({
+            "_id": department_object_id
+        })
+
+        if not department:
+            raise HTTPException(
+                status_code=404,
+                detail="Department not found."
+            )
+
+        update_fields["department_id"] = str(department["_id"])
+        update_fields["department_name"] = department.get("name", "")
+
     students_collection.update_one(
+        {"_id": user_object_id},
         {
-            "_id":
-                user_object_id
-        },
-        {
-            "$set": {
-
-                "role":
-                    role_data.role,
-
-                "updated_at":
-                    utc_now()
-            }
+            "$set": update_fields,
+            "$unset": (
+                {}
+                if role_data.role == "manager"
+                else {
+                    "department_id": "",
+                    "department_name": ""
+                }
+            )
         }
     )
 
-        # AUDIT LOG: USER ROLE UPDATED
     if user.get("role", "student") != role_data.role:
         log_audit_action(
             current_user,
@@ -1825,43 +2013,21 @@ def update_user_role(
             }
         )
 
-    updated_user = students_collection.find_one(
-        {
-            "_id":
-                user_object_id
-        }
-    )
+    updated_user = students_collection.find_one({
+        "_id": user_object_id
+    })
 
     return {
-
-        "message":
-            "User role updated successfully.",
-
+        "message": "User role updated successfully.",
         "user": {
-
-            "id":
-                str(updated_user["_id"]),
-
-            "name":
-                updated_user.get(
-                    "name",
-                    ""
-                ),
-
-            "email":
-                updated_user.get(
-                    "email",
-                    ""
-                ),
-
-            "role":
-                updated_user.get(
-                    "role",
-                    "student"
-                )
+            "id": str(updated_user["_id"]),
+            "name": updated_user.get("name", ""),
+            "email": updated_user.get("email", ""),
+            "role": updated_user.get("role", "student"),
+            "department_id": updated_user.get("department_id"),
+            "department_name": updated_user.get("department_name")
         }
     }
-
 
 # ============================================================
 # ADMIN USER MANAGEMENT
@@ -2020,7 +2186,7 @@ def create_admin_department(
         }
     }
 
- 
+
 @app.get("/admin/audit-logs")
 def get_admin_audit_logs(
     current_user=Depends(require_role("admin"))
@@ -2627,7 +2793,56 @@ def get_manager_reports(
             priority_counts
     }
 
+# ============================================================
+# MANAGER DASHBOARD
+# ============================================================
 
+@app.get("/manager/dashboard")
+def get_manager_dashboard(
+    current_user=Depends(
+        require_role(
+            "manager",
+            "admin"
+        )
+    )
+):
+
+    grievances = list(
+        grievances_collection.find({})
+    )
+
+    total = len(grievances)
+
+    resolved = sum(
+        1
+        for g in grievances
+        if g.get("status") == "Resolved"
+    )
+
+    closed = sum(
+        1
+        for g in grievances
+        if g.get("status") == "Closed"
+    )
+
+    open_cases = sum(
+        1
+        for g in grievances
+        if g.get("status") not in [
+            "Resolved",
+            "Closed",
+            "Rejected"
+        ]
+    )
+
+    return {
+        "stats": {
+            "total": total,
+            "open": open_cases,
+            "resolved": resolved,
+            "closed": closed
+        }
+    }
 # ============================================================
 # CREATE NOTIFICATION
 # ============================================================
@@ -2901,4 +3116,48 @@ def delete_notification(
 
         "message":
             "Notification deleted successfully."
+    }
+
+
+@app.delete("/grievances/{grievance_id}")
+def delete_grievance(
+    grievance_id: str,
+    current_user=Depends(
+        require_role("student", "manager", "admin")
+    )
+):
+    try:
+        grievance_object_id = ObjectId(grievance_id)
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid grievance ID."
+        )
+
+    role = current_user.get("role", "student")
+
+    query = {"_id": grievance_object_id}
+
+    if role == "student":
+        query["student_id"] = str(current_user["_id"])
+
+    grievance = grievances_collection.find_one(query)
+
+    if not grievance:
+        raise HTTPException(
+            status_code=404,
+            detail="Grievance not found or you are not authorized to delete it."
+        )
+
+    result = grievances_collection.delete_one(query)
+
+    if result.deleted_count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="Grievance could not be deleted."
+        )
+
+    return {
+        "message": "Grievance deleted successfully.",
+        "grievance_id": grievance_id
     }
